@@ -1,0 +1,24 @@
+{
+    "configurations": [
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:SitckyPasty}",
+            "name": "Debug StickyPasty",
+            "target": "StickyPasty",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug StickyPasty"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:SitckyPasty}",
+            "name": "Release StickyPasty",
+            "target": "StickyPasty",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release StickyPasty"
+        }
+    ]
+}
