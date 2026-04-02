@@ -19,6 +19,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         // 3. Clipboard monitoring
         monitor = ClipboardMonitor(store: store)
+        store.clipboardMonitor = monitor
         monitor.start()
 
         // 4. Global hotkey Option+Cmd+V

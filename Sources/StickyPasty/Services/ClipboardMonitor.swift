@@ -1,32 +1,29 @@
 import AppKit
-import Foundation
+import os
 
 class ClipboardMonitor {
     private weak var store: ClipboardStore?
     private var timer: DispatchSourceTimer?
     private var lastChangeCount: Int
-    private var suppressNext = false
+
+    /// Stores the changeCount to suppress (atomically accessed).
+    /// -1 means "nothing to suppress".
+    private let suppressedChangeCount = OSAllocatedUnfairLock(initialState: Int(-1))
 
     init(store: ClipboardStore) {
         self.store = store
         self.lastChangeCount = NSPasteboard.general.changeCount
-
-        // Listen for suppress requests from ClipboardItemRow when we write to clipboard ourselves
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(handleSuppress),
-            name: .suppressNextCapture,
-            object: nil
-        )
     }
 
     deinit {
-        NotificationCenter.default.removeObserver(self)
         stop()
     }
 
     func start() {
-        let t = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .utility))
+        // Poll on main thread — NSPasteboard/NSImage are AppKit objects
+        // and must be accessed from the main thread. The poll is lightweight
+        // (changeCount check + occasional string/image read).
+        let t = DispatchSource.makeTimerSource(queue: DispatchQueue.main)
         t.schedule(deadline: .now() + .milliseconds(500), repeating: .milliseconds(500))
         t.setEventHandler { [weak self] in self?.poll() }
         t.resume()
@@ -38,8 +35,9 @@ class ClipboardMonitor {
         timer = nil
     }
 
-    @objc private func handleSuppress() {
-        suppressNext = true
+    /// Suppress a specific changeCount so the monitor skips our own pasteboard write.
+    func suppressChangeCount(_ count: Int) {
+        suppressedChangeCount.withLock { $0 = count }
     }
 
     private func poll() {
@@ -48,10 +46,15 @@ class ClipboardMonitor {
         guard count != lastChangeCount else { return }
         lastChangeCount = count
 
-        if suppressNext {
-            suppressNext = false
-            return
+        // Check if this changeCount should be suppressed (our own write)
+        let suppressed = suppressedChangeCount.withLock { stored -> Bool in
+            if count == stored {
+                stored = -1
+                return true
+            }
+            return false
         }
+        if suppressed { return }
 
         // Try image first, then fall back to text
         if let image = NSImage(pasteboard: pb) {
@@ -78,8 +81,4 @@ class ClipboardMonitor {
             store?.add(item)
         }
     }
-}
-
-extension Notification.Name {
-    static let suppressNextCapture = Notification.Name("StickyPasty.suppressNextCapture")
 }

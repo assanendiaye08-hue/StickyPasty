@@ -42,6 +42,7 @@ cat > "${CONTENTS}/Info.plist" << 'PLIST'
     <key>NSSupportsSuddenTermination</key>     <false/>
     <key>NSHumanReadableCopyright</key>        <string>Copyright 2026 StickyPasty</string>
     <key>NSAppleEventsUsageDescription</key>   <string>StickyPasty uses Apple Events to paste clipboard content.</string>
+    <key>NSPhotoLibraryAddUsageDescription</key> <string>StickyPasty needs permission to save clipboard images to Photos.</string>
 </dict>
 </plist>
 PLIST

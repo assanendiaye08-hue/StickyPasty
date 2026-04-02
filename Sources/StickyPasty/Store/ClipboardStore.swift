@@ -6,6 +6,10 @@ class ClipboardStore: ObservableObject {
     @Published var spaces: [Space] = []
     @Published var searchQuery: String = ""
 
+    /// Set by AppDelegate after ClipboardMonitor is created.
+    /// Used by UI to suppress clipboard captures directly instead of via NotificationCenter.
+    weak var clipboardMonitor: ClipboardMonitor?
+
     private let itemsURL: URL
     private let spacesURL: URL
     private let maxItems = 500
@@ -21,7 +25,7 @@ class ClipboardStore: ObservableObject {
             if case .text(let s) = item.content {
                 return s.localizedCaseInsensitiveContains(searchQuery)
             }
-            return searchQuery.isEmpty   // images only show when no search
+            return false   // images have no searchable text
         }
     }
 
@@ -33,7 +37,7 @@ class ClipboardStore: ObservableObject {
             if case .text(let s) = item.content {
                 return s.localizedCaseInsensitiveContains(searchQuery)
             }
-            return false
+            return false   // images have no searchable text
         }
     }
 
@@ -53,17 +57,20 @@ class ClipboardStore: ObservableObject {
         spacesURL = dir.appendingPathComponent("spaces.json")
         load()
 
-        // Debounced auto-save
+        // Debounced auto-save — debounce on main (safe to read @Published),
+        // then dispatch file I/O to background with data already captured.
         $items
             .dropFirst()
-            .debounce(for: .seconds(1), scheduler: DispatchQueue.global(qos: .utility))
-            .sink { [weak self] _ in self?.saveItems() }
+            .debounce(for: .seconds(1), scheduler: DispatchQueue.main)
+            .receive(on: DispatchQueue.global(qos: .utility))
+            .sink { [weak self] currentItems in self?.saveItems(currentItems) }
             .store(in: &cancellables)
 
         $spaces
             .dropFirst()
-            .debounce(for: .seconds(1), scheduler: DispatchQueue.global(qos: .utility))
-            .sink { [weak self] _ in self?.saveSpaces() }
+            .debounce(for: .seconds(1), scheduler: DispatchQueue.main)
+            .receive(on: DispatchQueue.global(qos: .utility))
+            .sink { [weak self] currentSpaces in self?.saveSpaces(currentSpaces) }
             .store(in: &cancellables)
     }
 
@@ -99,82 +106,64 @@ class ClipboardStore: ObservableObject {
     }
 
     func delete(_ item: ClipboardItem) {
-        DispatchQueue.main.async {
-            self.items.removeAll { $0.id == item.id }
-        }
+        items.removeAll { $0.id == item.id }
     }
 
     func clearHistory() {
-        DispatchQueue.main.async {
-            self.items.removeAll { $0.spaceID == nil }
-        }
+        items.removeAll { $0.spaceID == nil }
     }
 
     // MARK: - Space assignment
 
     func addToSpace(_ item: ClipboardItem, spaceID: UUID) {
-        // Remove from history (or current space) and place into target space
-        updateItem(id: item.id) { $0.spaceID = spaceID }
+        guard let idx = items.firstIndex(where: { $0.id == item.id }) else { return }
+        items[idx].spaceID = spaceID
     }
 
     func removeFromSpace(_ item: ClipboardItem) {
-        // Move back to history
-        updateItem(id: item.id) { $0.spaceID = nil }
+        guard let idx = items.firstIndex(where: { $0.id == item.id }) else { return }
+        items[idx].spaceID = nil
     }
 
     /// Copy an item into a space without removing it from history
     func copyToSpace(_ item: ClipboardItem, spaceID: UUID) {
-        DispatchQueue.main.async {
-            let copy = ClipboardItem(
-                id: UUID(),
-                content: item.content,
-                timestamp: item.timestamp,
-                spaceID: spaceID
-            )
-            self.items.append(copy)
-        }
+        let copy = ClipboardItem(
+            id: UUID(),
+            content: item.content,
+            timestamp: item.timestamp,
+            spaceID: spaceID
+        )
+        items.append(copy)
     }
 
     // MARK: - Space CRUD
 
-    func addSpace(name: String) {
-        DispatchQueue.main.async {
-            let colorIndex = self.spaces.count % Space.presetColors.count
-            let space = Space(
-                id: UUID(),
-                name: name,
-                colorHex: Space.presetColors[colorIndex],
-                order: self.spaces.count
-            )
-            self.spaces.append(space)
-        }
+    @discardableResult
+    func addSpace(name: String) -> UUID {
+        let colorIndex = spaces.count % Space.presetColors.count
+        let space = Space(
+            id: UUID(),
+            name: name,
+            colorHex: Space.presetColors[colorIndex],
+            order: spaces.count
+        )
+        spaces.append(space)
+        return space.id
     }
 
     func renameSpace(_ space: Space, to name: String) {
-        DispatchQueue.main.async {
-            guard let idx = self.spaces.firstIndex(where: { $0.id == space.id }) else { return }
-            self.spaces[idx].name = name
-        }
+        guard let idx = spaces.firstIndex(where: { $0.id == space.id }) else { return }
+        spaces[idx].name = name
     }
 
     func deleteSpace(_ space: Space) {
-        DispatchQueue.main.async {
-            // Move all items from this space back to history
-            for idx in self.items.indices where self.items[idx].spaceID == space.id {
-                self.items[idx].spaceID = nil
-            }
-            self.spaces.removeAll { $0.id == space.id }
+        for idx in items.indices where items[idx].spaceID == space.id {
+            items[idx].spaceID = nil
         }
+        spaces.removeAll { $0.id == space.id }
     }
 
     // MARK: - Private
-
-    private func updateItem(id: UUID, transform: @escaping (inout ClipboardItem) -> Void) {
-        DispatchQueue.main.async {
-            guard let idx = self.items.firstIndex(where: { $0.id == id }) else { return }
-            transform(&self.items[idx])
-        }
-    }
 
     private func load() {
         if let data = try? Data(contentsOf: itemsURL),
@@ -187,13 +176,13 @@ class ClipboardStore: ObservableObject {
         }
     }
 
-    private func saveItems() {
-        guard let data = try? JSONEncoder().encode(items) else { return }
+    private func saveItems(_ itemsToSave: [ClipboardItem]) {
+        guard let data = try? JSONEncoder().encode(itemsToSave) else { return }
         try? data.write(to: itemsURL, options: .atomic)
     }
 
-    private func saveSpaces() {
-        guard let data = try? JSONEncoder().encode(spaces) else { return }
+    private func saveSpaces(_ spacesToSave: [Space]) {
+        guard let data = try? JSONEncoder().encode(spacesToSave) else { return }
         try? data.write(to: spacesURL, options: .atomic)
     }
 }

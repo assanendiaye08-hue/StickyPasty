@@ -1,4 +1,5 @@
 import CoreGraphics
+import AppKit
 import Carbon.HIToolbox
 
 enum PasteSimulator {

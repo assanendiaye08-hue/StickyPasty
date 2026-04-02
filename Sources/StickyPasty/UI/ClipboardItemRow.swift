@@ -1,11 +1,15 @@
 import SwiftUI
 import AppKit
+import Photos
 
 struct ClipboardItemRow: View {
     let item: ClipboardItem
     @ObservedObject var store: ClipboardStore
     let isInSpace: Bool
+    var isSelected: Bool = false
+    var shortcutNumber: Int? = nil
     let onDismiss: () -> Void
+    let onCopyAndPaste: () -> Void
 
     @State private var isHovered = false
 
@@ -25,8 +29,22 @@ struct ClipboardItemRow: View {
 
             Divider()
 
-            // Footer: timestamp
-            HStack {
+            // Footer: shortcut badge + timestamp
+            HStack(spacing: 6) {
+                if let n = shortcutNumber {
+                    Text("\(n)")
+                        .font(.system(size: 10, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.primary.opacity(0.7))
+                        .frame(width: 18, height: 18)
+                        .background(
+                            RoundedRectangle(cornerRadius: 4)
+                                .fill(Color.primary.opacity(0.06))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 4)
+                                        .strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5)
+                                )
+                        )
+                }
                 Text(item.timestamp, style: .relative)
                     .font(.system(size: 10))
                     .foregroundStyle(.tertiary)
@@ -44,17 +62,22 @@ struct ClipboardItemRow: View {
         .frame(maxHeight: .infinity)
         .background(
             RoundedRectangle(cornerRadius: 8)
-                .fill(isHovered
-                      ? Color.primary.opacity(0.10)
-                      : Color.primary.opacity(0.05))
+                .fill(isSelected
+                      ? Color.accentColor.opacity(0.15)
+                      : isHovered
+                        ? Color.primary.opacity(0.10)
+                        : Color.primary.opacity(0.05))
         )
         .overlay(
             RoundedRectangle(cornerRadius: 8)
-                .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
+                .strokeBorder(isSelected
+                              ? Color.accentColor.opacity(0.5)
+                              : Color.primary.opacity(0.08),
+                              lineWidth: isSelected ? 1.5 : 1)
         )
         .contentShape(Rectangle())
         .onHover { isHovered = $0 }
-        .onTapGesture { copyToClipboard() }
+        .onTapGesture { copyAndPaste() }
         .contextMenu { contextMenuContent }
     }
 
@@ -78,6 +101,17 @@ struct ClipboardItemRow: View {
                         .frame(width: geo.size.width, height: geo.size.height)
                 }
                 .background(Color.primary.opacity(0.04))
+                .onDrag {
+                    let provider = NSItemProvider()
+                    provider.registerDataRepresentation(
+                        forTypeIdentifier: "public.png",
+                        visibility: .all
+                    ) { completion in
+                        completion(data, nil)
+                        return nil
+                    }
+                    return provider
+                }
             } else {
                 Image(systemName: "photo")
                     .foregroundStyle(.secondary)
@@ -92,6 +126,12 @@ struct ClipboardItemRow: View {
     private var contextMenuContent: some View {
         Button("Copy") { copyToClipboard() }
         Button("Copy & Paste") { copyAndPaste() }
+
+        if item.isImage {
+            Divider()
+            Button("Save to Photos") { saveToPhotos() }
+            Button("Save to Downloads") { saveToDownloads() }
+        }
 
         Divider()
 
@@ -119,6 +159,16 @@ struct ClipboardItemRow: View {
 
     private func copyToClipboard() {
         let pb = NSPasteboard.general
+
+        // If the pasteboard already contains this exact text, skip the write.
+        // This preserves Handoff metadata and avoids an unnecessary changeCount bump.
+        if case .text(let s) = item.content,
+           let current = pb.string(forType: .string),
+           current == s {
+            store.clipboardMonitor?.suppressChangeCount(pb.changeCount)
+            return
+        }
+
         pb.clearContents()
         switch item.content {
         case .text(let s):
@@ -128,15 +178,31 @@ struct ClipboardItemRow: View {
                 pb.writeObjects([image])
             }
         }
-        NotificationCenter.default.post(name: .suppressNextCapture, object: nil)
+        // Suppress the changeCount we just created — synchronous, no timing window
+        store.clipboardMonitor?.suppressChangeCount(pb.changeCount)
     }
 
     private func copyAndPaste() {
         copyToClipboard()
-        onDismiss()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-            PasteSimulator.simulatePaste()
+        onCopyAndPaste()
+    }
+
+    private func saveToPhotos() {
+        guard case .image(let data) = item.content else { return }
+        PHPhotoLibrary.requestAuthorization(for: .addOnly) { status in
+            guard status == .authorized || status == .limited else { return }
+            PHPhotoLibrary.shared().performChanges {
+                let request = PHAssetCreationRequest.forAsset()
+                request.addResource(with: .photo, data: data, options: nil)
+            }
         }
+    }
+
+    private func saveToDownloads() {
+        guard case .image(let data) = item.content else { return }
+        let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first!
+        let dest = downloads.appendingPathComponent("clipboard-\(item.id).png")
+        try? data.write(to: dest)
     }
 
     private func promptCreateAndSave() {
@@ -152,12 +218,8 @@ struct ClipboardItemRow: View {
         if alert.runModal() == .alertFirstButtonReturn {
             let name = input.stringValue.trimmingCharacters(in: .whitespaces)
             if !name.isEmpty {
-                store.addSpace(name: name)
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                    if let space = store.spaces.last {
-                        store.copyToSpace(item, spaceID: space.id)
-                    }
-                }
+                let spaceID = store.addSpace(name: name)
+                store.copyToSpace(item, spaceID: spaceID)
             }
         }
     }
