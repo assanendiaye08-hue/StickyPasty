@@ -32,7 +32,7 @@ struct ClipboardItemRow: View {
             // Footer: shortcut badge + timestamp
             HStack(spacing: 6) {
                 if let n = shortcutNumber {
-                    Text("\(n)")
+                    Text("⌘\(n)")
                         .font(.system(size: 10, weight: .semibold, design: .rounded))
                         .foregroundStyle(.primary.opacity(0.7))
                         .frame(width: 18, height: 18)
@@ -184,6 +184,7 @@ struct ClipboardItemRow: View {
 
     private func copyAndPaste() {
         copyToClipboard()
+        store.bumpToFront(item)
         onCopyAndPaste()
     }
 

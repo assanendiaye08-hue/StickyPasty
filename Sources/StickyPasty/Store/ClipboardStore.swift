@@ -76,16 +76,32 @@ class ClipboardStore: ObservableObject {
 
     // MARK: - Clipboard item CRUD
 
+    /// Move an existing item to the front of history (e.g. when pasted from panel).
+    func bumpToFront(_ item: ClipboardItem) {
+        guard let idx = items.firstIndex(where: { $0.id == item.id }) else { return }
+        items.remove(at: idx)
+        let bumped = ClipboardItem(id: UUID(), content: item.content,
+                                   timestamp: Date(), spaceID: nil)
+        items.insert(bumped, at: 0)
+    }
+
     func add(_ item: ClipboardItem) {
         DispatchQueue.main.async {
-            // Deduplicate identical text in history (not in spaces)
-            if case .text(let newText) = item.content {
-                self.items.removeAll { existing in
-                    if case .text(let t) = existing.content {
-                        return t == newText && existing.spaceID == nil
-                    }
-                    return false
+            // If this exact content already exists in history, move it to the front
+            // instead of creating a duplicate.  New UUID so SwiftUI sees the change.
+            if let existingIndex = self.items.firstIndex(where: { existing in
+                guard existing.spaceID == nil else { return false }
+                switch (existing.content, item.content) {
+                case (.text(let a), .text(let b)): return a == b
+                case (.image(let a), .image(let b)): return a == b
+                default: return false
                 }
+            }) {
+                self.items.remove(at: existingIndex)
+                let moved = ClipboardItem(id: UUID(), content: item.content,
+                                          timestamp: Date(), spaceID: nil)
+                self.items.insert(moved, at: 0)
+                return
             }
             self.items.insert(item, at: 0)
             // Trim history — never evict Space items

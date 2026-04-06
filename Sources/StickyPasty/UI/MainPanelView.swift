@@ -76,6 +76,7 @@ struct MainPanelView: View {
             guard selectedIndex < items.count else { return false }
             let item = items[selectedIndex]
             copyItemToClipboard(item)
+            store.bumpToFront(item)
             onCopyAndPaste()
             return true
         case 51: // Delete/Backspace — remove selected item
@@ -85,14 +86,16 @@ struct MainPanelView: View {
             if selectedIndex >= items.count - 1 { selectedIndex = max(0, items.count - 2) }
             return true
         default:
-            // Number keys 1–9: quick paste nth item
-            if let chars = event.charactersIgnoringModifiers,
+            // Cmd+1–9: quick paste nth item
+            if event.modifierFlags.contains(.command),
+               let chars = event.charactersIgnoringModifiers,
                let digit = chars.first?.wholeNumberValue,
                digit >= 1 && digit <= 9 {
                 let idx = digit - 1
                 guard idx < items.count else { return false }
                 let item = items[idx]
                 copyItemToClipboard(item)
+                store.bumpToFront(item)
                 onCopyAndPaste()
                 return true
             }
